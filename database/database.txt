@@ -1,0 +1,191 @@
+-- delete all tables
+DO $$
+DECLARE
+    tbl RECORD;
+BEGIN
+    -- Loop through all tables in the public schema
+    FOR tbl IN (
+        SELECT tablename FROM pg_tables
+        WHERE schemaname = 'public'
+    ) LOOP
+        EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE;', tbl.tablename);
+    END LOOP;
+END $$;
+
+-- User
+CREATE TABLE IF NOT EXISTS public.users
+(
+    id SERIAL PRIMARY KEY,
+    login text COLLATE pg_catalog."default" NOT NULL,
+    username text COLLATE pg_catalog."default" NOT NULL,
+    password_hash text COLLATE pg_catalog."default" NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    is_online boolean NOT NULL DEFAULT false,
+    last_seen_online timestamp with time zone NOT NULL DEFAULT now(),
+    CONSTRAINT users_login_key UNIQUE (login),
+    CONSTRAINT users_username_key UNIQUE (username)
+);
+
+
+CREATE TABLE IF NOT EXISTS public.chat
+(
+    id SERIAL PRIMARY KEY,
+    type text COLLATE pg_catalog."default" NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    CONSTRAINT chat_type_check CHECK (type = ANY (ARRAY['private'::text, 'group'::text]))
+);
+
+CREATE TABLE IF NOT EXISTS public.private_chat
+(
+    chat_id integer NOT NULL,
+    user1_id integer NOT NULL,
+    user2_id integer NOT NULL,
+    CONSTRAINT private_chat_pkey PRIMARY KEY (chat_id),
+    CONSTRAINT private_chat_user1_id_user2_id_key UNIQUE (user1_id, user2_id),
+    CONSTRAINT private_chat_chat_id_fkey FOREIGN KEY (chat_id)
+        REFERENCES public.chat (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT private_chat_user1_id_fkey FOREIGN KEY (user1_id)
+        REFERENCES public.users (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT private_chat_user2_id_fkey FOREIGN KEY (user2_id)
+        REFERENCES public.users (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT private_chat_check CHECK (user1_id < user2_id)
+);
+
+CREATE TABLE IF NOT EXISTS group_chat (
+    chat_id INTEGER PRIMARY KEY REFERENCES chat(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS group_chat_member (
+    chat_id INTEGER NOT NULL REFERENCES group_chat(chat_id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (chat_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.message
+(
+    id SERIAL PRIMARY KEY,
+    chat_id integer NOT NULL,
+    sender_id integer NOT NULL,
+    reply_to_id integer,
+    content text COLLATE pg_catalog."default" NOT NULL,
+    sent_at timestamp with time zone NOT NULL DEFAULT now(),
+    has_reply boolean NOT NULL DEFAULT false,
+    is_deleted boolean NOT NULL DEFAULT false,
+    last_edited timestamp with time zone,
+    CONSTRAINT message_chat_id_fkey FOREIGN KEY (chat_id)
+        REFERENCES public.chat (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT message_reply_to_id_fkey FOREIGN KEY (reply_to_id)
+        REFERENCES public.message (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE SET NULL,
+    CONSTRAINT message_sender_id_fkey FOREIGN KEY (sender_id)
+        REFERENCES public.users (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE SET NULL
+);
+
+CREATE OR REPLACE FUNCTION public.create_or_get_private_chat(
+	user_a integer,
+	user_b integer)
+    RETURNS integer
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE PARALLEL UNSAFE
+AS $BODY$
+DECLARE
+    new_chat_id integer;
+    existing_chat_id integer;
+BEGIN
+    -- Prevent private chat with self
+    IF user_a = user_b THEN
+        RAISE EXCEPTION 'Cannot create private chat with the same user (%)', user_a;
+    END IF;
+
+    -- Normalize user order to match CHECK constraint (user1_id < user2_id)
+    SELECT user1_id, user2_id INTO user_a, user_b
+    FROM (SELECT LEAST(user_a, user_b) AS user1_id, GREATEST(user_a, user_b) AS user2_id) AS normalized;
+
+    -- Check if private chat already exists
+    SELECT chat_id INTO existing_chat_id
+    FROM private_chat
+    WHERE user1_id = user_a AND user2_id = user_b;
+
+    IF FOUND THEN
+        RETURN existing_chat_id;
+    END IF;
+
+    -- If no existing chat, proceed to create one
+    WITH new_chat AS (
+        INSERT INTO chat (type)
+        VALUES ('private')
+        RETURNING id
+    ),
+    priv_chat AS (
+        INSERT INTO private_chat (chat_id, user1_id, user2_id)
+        SELECT id, user_a, user_b
+        FROM new_chat
+        RETURNING chat_id
+    )
+    SELECT chat_id INTO new_chat_id FROM priv_chat;
+
+    RETURN new_chat_id;
+END;
+$BODY$;
+
+CREATE OR REPLACE FUNCTION public.get_private_chat_id(
+	user_a_id integer,
+	user_b_id integer)
+    RETURNS integer
+    LANGUAGE 'plpgsql'
+    COST 100
+    IMMUTABLE STRICT PARALLEL UNSAFE
+AS $BODY$
+DECLARE
+    chat_id integer;
+BEGIN
+    -- Ensure consistent ordering: smaller user ID first
+    IF user_a_id > user_b_id THEN
+        RETURN get_private_chat_id(user_b_id, user_a_id);
+    END IF;
+
+    -- Look up the chat_id in private_chat table
+    SELECT pc.chat_id INTO chat_id
+    FROM public.private_chat pc
+    WHERE pc.user1_id = user_a_id AND pc.user2_id = user_b_id;
+
+    -- Return found chat_id or 0 if not found
+    RETURN COALESCE(chat_id, 0);
+END;
+$BODY$;
+
+CREATE OR REPLACE FUNCTION public.is_private_chat(
+	chat_id integer)
+    RETURNS boolean
+    LANGUAGE 'plpgsql'
+    COST 100
+    IMMUTABLE PARALLEL UNSAFE
+AS $BODY$
+BEGIN
+    IF chat_id = 0 THEN
+        RETURN true;
+    ELSE
+        RETURN EXISTS (
+            SELECT 1
+            FROM public.private_chat
+            WHERE private_chat.chat_id = is_private_chat.chat_id
+        );
+    END IF;
+END;
+$BODY$;

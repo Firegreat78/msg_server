@@ -1,4 +1,4 @@
-// Copyright 2025 Medvedev Dan (Firegreat)
+// Copyright 2025 Medvedev Dan (https://github.com/Firegreat78)
 
 /*
 Permission is hereby granted, free of charge, to any person or organization
@@ -33,7 +33,10 @@ DEALINGS IN THE SOFTWARE.
 #include "Logger.h"
 #include "SocketListener.h"
 #include "ClientConnection.h"
+#include "DatabaseConnection.h"
 #include "json.hpp"
+
+#include "pqxx/pqxx"
 
 #pragma comment(lib, "Ws2_32.lib")  // Link Winsock library
 
@@ -42,8 +45,13 @@ int main(int argc, char** argv)
     // The messenger won't be able to run properly on machines with byte size larger than 8 bits.
     static_assert(CHAR_BIT == 8, "Architectures with byte size larger than 8 are unsupported.");
     Logger& logger = Logger::getInstance();
-
+    logger.log("The logger has been initialized successfully.");
+    
+    // Try to initialize db connection before initializing socket listener.
+    DatabaseConnection::getInstance();
+    
     // TODO: determine the machine's endianness.
+
 
     // The server contains a listener. If the listener fails to initialize, the server will shut down.
     // Otherwise, the listener runs in a loop and listens for incoming connections.
@@ -53,10 +61,13 @@ int main(int argc, char** argv)
     {
         ptrSock = std::make_unique<SocketListener>();
     }
-    catch (std::runtime_error const& e)
+    catch (std::exception const& e)
     {
-        logger.log("The server failed to initialize the socket listener. The server will shut down.");
-        return 1;
+        std::string const msg = 
+        std::string("The server failed to initialize the socket listener. Exception thrown: ") + 
+        e.what();
+        logger.log(msg);
+        std::exit(EXIT_FAILURE);
     }
     logger.log("The socket listener has been initialized successfully.");
     
@@ -69,7 +80,8 @@ int main(int argc, char** argv)
     {
         std::string msg = std::string("The listen loop threw an exception: ") + e.what();
         logger.log(msg);
-        return 1;
+        std::exit(EXIT_FAILURE);
     }
+    std::exit(EXIT_SUCCESS);
     return 0;
 }

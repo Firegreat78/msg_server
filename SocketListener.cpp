@@ -1,5 +1,6 @@
 #include "SocketListener.h"
 #include "Logger.h"
+#include "DatabaseConnection.h"
 
 #include <vector>
 
@@ -73,22 +74,31 @@ void SocketListener::listenForConnections()
             logger.log(msg);
             closesocket(client);
         }
-        // Now, we need to delete all clients which are disconnected and their reconnection attempts failed.
-        // isPendingToDelete() returns true strictly only if the client thread has been already finished, so this is safe.
+        // Now, we need to delete all clients which are disconnected.
+        // isPendingToDelete() returns true strictly only if the client thread will be finished, so this is safe.
         std::vector<size_t> to_delete;
         for (auto it = this->connections.begin(); it != this->connections.end(); ++it)
         {
             if (it->second->isPendingToDelete())
             {
                 to_delete.push_back(it->first);
+                
+                // If the user was online at the moment when socket disconnected due to error,
+                // we need to check the amount of logins to the same account
+                // (two clients may auth to the same account).
+                // in case the last client disconnected, set 
+                // the 'is_online' value for the user to false. 
+                DatabaseConnection::getInstance().onLogonUserDisconnect(it->first);
+                
             }
         }
         // We cannot modify the collection while iterating over it
         // (since it would invalidate the iterator), so we need this loop below.
         for (size_t i = 0; i < to_delete.size(); i++)
         {
-            // We must join a thread before std::thread object destructor gets called, or
+            // We must join/detach a thread before std::thread object destructor gets called, or
             // otherwise it will call std::terminate.
+            // This is designed to prevent undefined behavior caused by resource leaks or dangling references.
             this->connections[to_delete[i]]->joinThread();
             
             // No memory leaked since we are using unique_ptr, and erase() calls destructor of the map value.
@@ -96,8 +106,5 @@ void SocketListener::listenForConnections()
             this->connections.erase(to_delete[i]);
         }
         to_delete.clear();
-        
-        // We sleep for a brief time so the main thread won't consume too much CPU time
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
