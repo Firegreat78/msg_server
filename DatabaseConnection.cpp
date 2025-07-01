@@ -36,7 +36,7 @@ DatabaseConnection& DatabaseConnection::getInstance()
 DatabaseConnection::DatabaseConnection()
 {
     Logger& logger = Logger::getInstance();
-    std::string const db_uri = "postgresql://postgres:12345@localhost:5432/messenger_db";
+    std::string const db_uri = "postgresql://postgres:12345@localhost:5433/messenger_db";
     try
     {
         connection = std::make_unique<pqxx::connection>(db_uri);
@@ -91,7 +91,7 @@ void DatabaseConnection::onLogonUserDisconnect(size_t thr_id)
     // Decrement the amount of authorizations to some account
     users_amount[logon_user_id]--;
     
-    // If the current closed authorization is not the last one, we don't do anything
+    // If the current closed authorization is not the last one for a specific user, we don't do anything
     // Otherwise we update the DB
     if (users_amount[logon_user_id] != 0) return;
     try
@@ -134,7 +134,7 @@ json DatabaseConnection::loginHandler(json const& js)
         pqxx::work txn(*connection);
         query_result = txn.exec_params(
             "SELECT * FROM users "
-            "WHERE login = $1 AND password_hash = $2",
+            "WHERE login = $1 AND password_hash = $2 AND NOT is_deleted",
             login, password_hash
         );
         
@@ -341,7 +341,6 @@ json DatabaseConnection::exitAccountHandler(json const& js)
     return response;
 }
 
-// TODO: add group chats
 json DatabaseConnection::updateChatListHandler(json const& js)
 {
     json response;
@@ -359,7 +358,9 @@ json DatabaseConnection::updateChatListHandler(json const& js)
             "target.is_online AS other_user_is_online, "
             "date_trunc('second', target.last_seen_online) AS other_user_last_seen_online, "
             "COALESCE(unread.unread_count, 0) AS unread_count "
-            "FROM (SELECT id, username FROM users WHERE id != $1) AS u "
+            "FROM ("
+            "SELECT id, username FROM users WHERE id != $1 AND NOT is_deleted"
+            ") AS u "
             "LEFT JOIN LATERAL ( "
             "SELECT pc.chat_id FROM private_chat pc "
             "WHERE pc.user1_id = LEAST($1::integer, u.id) "
@@ -457,13 +458,13 @@ json DatabaseConnection::renewChatListInfoHandler(json const& js)
         pqxx::work txn(*connection);
         
         query_result = txn.exec_params(
-            "SELECT u.id AS other_user_id, u.username, pc.chat_id, m.content, "
+            "SELECT u.id AS other_user_id, u.is_deleted, u.username, pc.chat_id, m.content, "
             "date_trunc('second', m.sent_at) as sent_at, "
             "sender.username AS last_message_sender_username, "
             "target.is_online AS other_user_is_online, "
             "date_trunc('second', target.last_seen_online) AS other_user_last_seen_online, "
             "COALESCE(unread.unread_count, 0) AS unread_count "
-            "FROM (SELECT id, username FROM users WHERE id = ANY($1)) AS u "
+            "FROM (SELECT id, username, is_deleted FROM users WHERE id = ANY($1)) AS u "
             "LEFT JOIN LATERAL ( "
             "SELECT pc.chat_id FROM private_chat pc "
             "WHERE pc.user1_id = LEAST($2::integer, u.id) "
@@ -492,6 +493,7 @@ json DatabaseConnection::renewChatListInfoHandler(json const& js)
         
         json ids = json::array();
         json usernames = json::array();
+        json deleted_statuses = json::array();
         json chat_ids = json::array();
         json last_msg_contents = json::array();
         json last_msg_ts = json::array();
@@ -499,33 +501,40 @@ json DatabaseConnection::renewChatListInfoHandler(json const& js)
         json online_statuses = json::array();
         json last_seen_online = json::array();
         json unread_msgs_cnt = json::array();
+    
         for (const auto& row : query_result)
         {
             ids.push_back(row[0].as<int64_t>());
-
-            usernames.push_back(std::string("@") + row[1].as<std::string>());
             
-            if (row[2].is_null()) chat_ids.push_back(nullptr);
-            else chat_ids.push_back(row[2].as<int64_t>());
+            bool const is_user_deleted = row[1].as<bool>();
+            deleted_statuses.push_back(is_user_deleted);
 
-            if (row[3].is_null()) last_msg_contents.push_back(nullptr);
-            else last_msg_contents.push_back(row[3].as<std::string>());
+            usernames.push_back(std::string("@") + row[2].as<std::string>());
+            
+            if (row[3].is_null() || is_user_deleted) chat_ids.push_back(nullptr);
+            else chat_ids.push_back(row[3].as<int64_t>());
 
-            if (row[4].is_null()) last_msg_ts.push_back(nullptr);
-            else last_msg_ts.push_back(row[4].as<std::string>());
+            if (row[4].is_null() || is_user_deleted) last_msg_contents.push_back(nullptr);
+            else last_msg_contents.push_back(row[4].as<std::string>());
 
-            if (row[5].is_null()) last_msg_username.push_back(nullptr);
-            else last_msg_username.push_back(std::string("@") + row[5].as<std::string>());
+            if (row[5].is_null() || is_user_deleted) last_msg_ts.push_back(nullptr);
+            else last_msg_ts.push_back(row[5].as<std::string>());
 
-            online_statuses.push_back(row[6].as<bool>());
+            if (row[6].is_null() || is_user_deleted) last_msg_username.push_back(nullptr);
+            else last_msg_username.push_back(std::string("@") + row[6].as<std::string>());
+            
+            if (is_user_deleted) online_statuses.push_back(nullptr);
+            else online_statuses.push_back(row[7].as<bool>());
 
-            if (row[7].is_null()) last_seen_online.push_back(nullptr);
-            else last_seen_online.push_back(row[7].as<std::string>());
+            if (row[8].is_null() || is_user_deleted) last_seen_online.push_back(nullptr);
+            else last_seen_online.push_back(row[8].as<std::string>());
 
-            unread_msgs_cnt.push_back(row[8].as<int64_t>());
+            if (is_user_deleted) unread_msgs_cnt.push_back(nullptr);
+            else unread_msgs_cnt.push_back(row[9].as<int64_t>());
         }
         response["user_ids"] = ids;
         response["usernames"] = usernames;
+        response["deleted_statuses"] = deleted_statuses;
         response["chat_ids"] = chat_ids;
         response["last_msg_contents"] = last_msg_contents;
         response["last_msg_ts"] = last_msg_ts;
@@ -607,7 +616,6 @@ json DatabaseConnection::getChatMessages(pqxx::result const& message_list)
 // In case when such message exists, we will load it and neighbour messages.
 // In case when there's no such message, we will load N newest messages.
 // Filters are automatically disabled in this case.
-
 json DatabaseConnection::chatLoadHandler(json const& js)
 {
     json response;
@@ -874,23 +882,33 @@ json DatabaseConnection::sendMsgHandler(json const& js)
         if (is_private_chat)
         {
             int64_t const recv_id = js["receiver_id"].get<int64_t>();
+            
             query_result = txn.exec_params(
                 "SELECT create_or_get_private_chat($1, $2)",
                 sender_id, recv_id
             );
 
+            // if any of sender_id/recv_id is a deleted account,
+            // then 'create_or_get_private_chat' function will return 0.
+            //
+            // if neither of sender_id/recv_id is a deleted account, then
             // chat_id holds a valid id here even if it was lazy initialized just now
             chat_id = query_result[0][0].as<int64_t>();
             
             // add this to response so frontend client can apply it
             // or it won't be able to fetch/update messages via timer
-            if (update_chat_id) response["chat_id"] = chat_id;
+            // skip this if chat_id == 0 because we won't send a msg anyway
+            if (update_chat_id && chat_id != 0) response["chat_id"] = chat_id;
 
         }
-        else // group chat (fetch chat id)
+
+        if (chat_id == 0)
         {
-
+            response["success"] = 0;
+            response["reason"] = "Cannot send message in private chat: receiver's account was deleted.";
+            return response;
         }
+
         // after fetching desired chat id (group/private), we are ready to send the message.
         
         // if reply_to_id == 0 then there was no answer
@@ -1320,50 +1338,6 @@ json DatabaseConnection::gotoMsgHandler(json const& js)
     {
         std::lock_guard<std::mutex> lock(mutex);
         pqxx::work txn(*connection);
-        /*query_result = txn.exec_params(
-            "WITH target AS (SELECT id FROM public.message "
-            "WHERE id = $1::integer AND chat_id = $2::integer), "
-            "before_messages AS ( "
-            "SELECT m.* "
-            "FROM public.message m "
-            "WHERE m.chat_id = $2::integer AND  "
-            "m.id < (SELECT id FROM target) "
-            "ORDER BY m.id DESC LIMIT $3::integer), "
-            "after_messages AS ( "
-            "SELECT m.* "
-            "FROM public.message m "
-            "WHERE m.chat_id = $2::integer AND  "
-            "m.id > (SELECT id FROM target) "
-            "ORDER BY m.id LIMIT $4::integer), "
-            "target_message AS ( "
-            "SELECT m.* "
-            "FROM public.message m "
-            "WHERE m.id = $1::integer AND m.chat_id = $2::integer), "
-            "full_set AS ( "
-            "SELECT * FROM before_messages "
-            "UNION ALL "
-            "SELECT * FROM target_message "
-            "UNION ALL "
-            "SELECT * FROM after_messages) "
-            "SELECT m.id, m.chat_id, m.sender_id,  "
-            "m.reply_to_id, m.content AS message_content,  "
-            "date_trunc('second', m.sent_at) AS sent_at,  "
-            "replied_message.content AS replied_message_content,  "
-            "u.username, m.has_reply, m.is_deleted,  "
-            "date_trunc('second', m.last_edited) AS last_edited,  "
-            "replied_message.is_deleted AS is_reply_deleted,  "
-            "replied_message.sender_id AS reply_to_user_id,  "
-            "replied_user.username AS reply_to_username, m.is_read "
-            "FROM full_set m "
-            "LEFT JOIN public.message AS replied_message ON m.reply_to_id = replied_message.id "
-            "JOIN public.users AS u ON m.sender_id = u.id "
-            "LEFT JOIN public.users AS replied_user ON replied_message.sender_id = replied_user.id "
-            "ORDER BY m.id",
-            msg_id, chat_id,
-            max_chat_msgs/2 + (max_chat_msgs % 2) - 1,
-            max_chat_msgs/2
-
-        );*/
         query_result = txn.exec_params(
             "WITH RECURSIVE "
             "params AS ( "
@@ -1523,6 +1497,50 @@ json DatabaseConnection::countUnreadMsgsHandler(json const& js)
         response["above"] = query_result[0][0].as<int64_t>();
         response["inside"] = query_result[0][1].as<int64_t>();
         response["below"] = query_result[0][2].as<int64_t>();
+    }
+
+    catch (pqxx::sql_error const& e)
+    {
+        response["success"] = 0;
+        response["reason"] = std::string("pqxx::sql_error occurred: ") + e.what();
+    }
+
+    catch (std::exception const& e)
+    {
+        response["success"] = 0;
+        response["reason"] = std::string("std::exception occurred: ") + e.what();
+    }
+    return response;
+}
+
+json DatabaseConnection::deleteAccountHandler(json const& js)
+{
+    json response;
+    pqxx::result query_result;
+    int64_t const logon_user_id = js["logon_user_id"].get<int64_t>();
+    try
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        pqxx::work txn(*connection);
+        query_result = txn.exec_params(
+            "UPDATE users "
+            "SET is_deleted = TRUE, "
+            "is_online = FALSE, "
+            "login = $2::text, username = $2::text "
+            "WHERE id = $1::integer",
+            logon_user_id, std::string()
+        );
+        query_result = txn.exec_params(
+            "UPDATE message "
+            "SET is_deleted = TRUE "
+            "WHERE chat_id IN ("
+            "SELECT chat_id FROM private_chat "
+            "WHERE user1_id = $1::integer OR user2_id = $1::integer"
+            ")",
+            logon_user_id
+        );
+        txn.commit();
+        response["success"] = 1;
     }
 
     catch (pqxx::sql_error const& e)

@@ -26,7 +26,6 @@ DEALINGS IN THE SOFTWARE.
 
 // Server - side messenger part, written in C++17.
 // For course project
-// TODO: Crossplatform: works for Windows and Linux.
 
 
 
@@ -50,8 +49,6 @@ int main(int argc, char** argv)
     // Try to initialize db connection before initializing socket listener.
     DatabaseConnection::getInstance();
     
-    // TODO: determine the machine's endianness.
-
 
     // The server contains a listener. If the listener fails to initialize, the server will shut down.
     // Otherwise, the listener runs in a loop and listens for incoming connections.
@@ -71,7 +68,6 @@ int main(int argc, char** argv)
     }
     logger.log("The socket listener has been initialized successfully.");
     
-    // TODO: What happens if a function inside try block creates a new thread, and inside the new thread an exception occurs?
     try
     {
         ptrSock->listenForConnections(); // An infinite listen loop.

@@ -51,7 +51,6 @@ ClientConnection::~ClientConnection()
 }
 
 
-
 // For each json we received from the client, we generate a 
 // corresponding json which will be sent to the client.
 json generateResponse(json const& js)
@@ -62,28 +61,29 @@ json generateResponse(json const& js)
     json response;
     try
     {
-        std::string const type = js["type"].get<std::string>();
-        response["type"] = type + "Response";
+        int const type = js["type"].get<int>();
+        response["type"] = type;
 
-        if (type == "userLogin") response["response"] = conn.loginHandler(js);
-        else if (type == "userRegister") response["response"] = conn.registerHandler(js);
-        else if (type == "changeUsername") response["response"] = conn.changeUsernameHandler(js);
-        else if (type == "changePassword") response["response"] = conn.changePasswordHandler(js);
-        else if (type == "exitAccount") response["response"] = conn.exitAccountHandler(js);
-        else if (type == "updateChatList") response["response"] = conn.updateChatListHandler(js);
-        else if (type == "loadChat") response["response"] = conn.chatLoadHandler(js);
-        else if (type == "loadChatFilter") response["response"] = conn.chatLoadFilterHandler(js);
-        else if (type == "sendMessage") response["response"] = conn.sendMsgHandler(js);
-        else if (type == "updateMessage") response["response"] = conn.updateMessageHandler(js);
-        else if (type == "deleteMessage") response["response"] = conn.deleteMessageHandler(js);
-        else if (type == "requestArrivedMessages") response["response"] = conn.getArrivedMsgHandler(js);
-        else if (type == "requestUpperMsgs") response["response"] = conn.requestUpperMsgsHandler(js);
-        else if (type == "requestLowerMsgs") response["response"] = conn.requestLowerMsgsHandler(js);
-        else if (type == "gotoMsg") response["response"] = conn.gotoMsgHandler(js);
-        else if (type == "updateFrontendMsgs") response["response"] = conn.updateFrontendMsgs(js);
-        else if (type == "changeOnlineStatus") response["response"] = conn.changeOnlineStatusHandler(js);
-        else if (type == "updateUsersList") response["response"] = conn.renewChatListInfoHandler(js);
-        else if (type == "countUnread") response["response"] = conn.countUnreadMsgsHandler(js);
+        if (type == USER_LOGIN) response["response"] = conn.loginHandler(js);
+        if (type == USER_REGISTER) response["response"] = conn.registerHandler(js);
+        if (type == CHANGE_USERNAME) response["response"] = conn.changeUsernameHandler(js);
+        if (type == CHANGE_PASSWORD) response["response"] = conn.changePasswordHandler(js);
+        if (type == EXIT_ACCOUNT) response["response"] = conn.exitAccountHandler(js);
+        if (type == DELETE_ACCOUNT) response["response"] = conn.deleteAccountHandler(js);
+        if (type == UPDATE_CHAT_LIST) response["response"] = conn.updateChatListHandler(js);
+        if (type == LOAD_CHAT) response["response"] = conn.chatLoadHandler(js);
+        if (type == LOAD_CHAT_FILTER) response["response"] = conn.chatLoadFilterHandler(js);
+        if (type == SEND_MESSAGE) response["response"] = conn.sendMsgHandler(js);
+        if (type == UPDATE_MESSAGE) response["response"] = conn.updateMessageHandler(js);
+        if (type == DELETE_MESSAGE) response["response"] = conn.deleteMessageHandler(js);
+        if (type == REQUEST_ARRIVED_MESSAGES) response["response"] = conn.getArrivedMsgHandler(js);
+        if (type == REQUEST_UPPER_MESSAGES) response["response"] = conn.requestUpperMsgsHandler(js);
+        if (type == REQUEST_LOWER_MESSAGES) response["response"] = conn.requestLowerMsgsHandler(js);
+        if (type == GOTO_MSG) response["response"] = conn.gotoMsgHandler(js);
+        if (type == UPDATE_FRONTEND_MESSAGES) response["response"] = conn.updateFrontendMsgs(js);
+        if (type == CHANGE_ONLINE_STATUS) response["response"] = conn.changeOnlineStatusHandler(js);
+        if (type == UPDATE_USERS_LIST) response["response"] = conn.renewChatListInfoHandler(js);
+        if (type == COUNT_UNREAD) response["response"] = conn.countUnreadMsgsHandler(js);
     }
 
     catch (json::parse_error const& e)
@@ -92,7 +92,7 @@ json generateResponse(json const& js)
             std::string("json::parse_error exception was thrown in the generateResponse function. "
             "Check and debug socket-related code. Exception: ") + e.what();
         Logger::getInstance().log(msg);
-        response["type"] = "error";
+        response["type"] = ERROR_TYPE;
         response["info"] = "JSON parse error.";
     }
 
@@ -102,13 +102,13 @@ json generateResponse(json const& js)
             std::string("Some exception was thrown in the generateResponse function. "
             "Exception: ") + e.what();
         Logger::getInstance().log(msg);
-        response["type"] = "error";
+        response["type"] = ERROR_TYPE;
         response["info"] = std::string("Unknown error: ") + e.what();
     }
     return response;
 }
 
-// All data might not be sent simultaneously. We need to sent it in a loop to ensure that all data will be sent.
+// All data might not be sent simultaneously. We need to send it in a loop to ensure that all data will be sent.
 bool ClientConnection::sendAll(std::string const& data)
 {
     Logger& logger = Logger::getInstance();
@@ -153,9 +153,9 @@ void ClientConnection::handle_client(ClientConnection* const conn)
                 conn->pendingDelete = true;
             }
 
-            else if (wsa_last_error == WSAETIMEDOUT) // recv timeout (no heartbeat from the client...)
+            else if (wsa_last_error == WSAETIMEDOUT) // recv timeout
             {
-                std::string const msg = std::string("Heartbeat timed out from client ") + 
+                std::string const msg = std::string("Recv timed out from client ") + 
                 conn->getClientInfo();
                 logger.log(msg);
                 //conn->pendingDelete = true;
@@ -173,25 +173,24 @@ void ClientConnection::handle_client(ClientConnection* const conn)
             {
                 json const js_to_client = generateResponse(js_from_client);
                 conn->jsons_to_client.push_back(js_to_client);
-                std::string const type = js_to_client["type"].get<std::string>();
+                int const type = js_to_client["type"].get<int>();
                 
                 // We count the amount of successful logins so we can track whether one of the devices is logon
                 // into some account at some monent in time. Later, if connection closes (conn->pendingDelete = true), 
                 // or user exits from their account,
                 // we decrement the counter. If it hits zero, we update the database and set 'is_online' for that user to false.
-                
-                if (type == "userLoginResponse")
+                if (type == USER_LOGIN)
                 {
                     if (js_to_client["response"]["success"].get<int64_t>() == 0) continue;
 
                     int64_t const logon_user_id = js_to_client["response"]["id"].get<int64_t>();
                     DatabaseConnection::getInstance().addLogonUser(conn->thread_id, logon_user_id); 
                 }
-                else if (type == "exitAccountResponse")
+                else if (type == EXIT_ACCOUNT || type == DELETE_ACCOUNT)
                 {
                     if (js_to_client["response"]["success"].get<int64_t>() == 0) continue;
 
-                    // Now this socket is not handling the user, so we decrement the counter
+                    // Now this thread is not handling the user, so we decrement the counter
                     DatabaseConnection::getInstance().onLogonUserDisconnect(conn->thread_id);
                 }
             }
@@ -259,6 +258,7 @@ void ClientConnection::onBytesReceived()
 {
     recv_buf[bytes_received] = 0;
     std::string chunk = incomplete_json + std::string(recv_buf.data());
+    incomplete_json.clear();
     while (true)
     {
         size_t const index = getFirstCompletedIndex(chunk);
@@ -289,6 +289,7 @@ void ClientConnection::setRecvTimeout(int millis)
         throw std::runtime_error(msg);
     }
     auto msg = std::string("Set socket option for data receive timeout successfully. Socket: ") + std::to_string(socket);
+    logger.log(msg);
 }
 
 void ClientConnection::setSendTimeout(int millis)
@@ -301,6 +302,7 @@ void ClientConnection::setSendTimeout(int millis)
         throw std::runtime_error(msg);
     }
     auto msg = std::string("Set socket option for data send timeout successfully. Socket: ") + std::to_string(socket);
+    logger.log(msg);
 }
 
 bool ClientConnection::isPendingToDelete() const

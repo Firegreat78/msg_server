@@ -27,6 +27,31 @@ DEALINGS IN THE SOFTWARE.
 #ifndef DATABASECONNECTION_H
 #define DATABASECONNECTION_H
 
+enum jsType
+{
+    USER_LOGIN,
+    USER_REGISTER,
+    CHANGE_USERNAME,
+    CHANGE_PASSWORD,
+    EXIT_ACCOUNT,
+    DELETE_ACCOUNT,
+    UPDATE_CHAT_LIST,
+    LOAD_CHAT,
+    LOAD_CHAT_FILTER,
+    SEND_MESSAGE,
+    UPDATE_MESSAGE,
+    DELETE_MESSAGE,
+    REQUEST_ARRIVED_MESSAGES,
+    REQUEST_UPPER_MESSAGES,
+    REQUEST_LOWER_MESSAGES,
+    GOTO_MSG,
+    UPDATE_FRONTEND_MESSAGES,
+    CHANGE_ONLINE_STATUS,
+    UPDATE_USERS_LIST,
+    COUNT_UNREAD,
+    ERROR_TYPE,
+};
+
 #include "pqxx/pqxx"
 
 #include "json.hpp"
@@ -121,6 +146,9 @@ class DatabaseConnection
 
     // For counting unread msgs above/inside/below the chat's scope.
     json countUnreadMsgsHandler(json const&);
+
+    // Account deletion.
+    json deleteAccountHandler(json const&);
 };
 
 #endif // DATABASECONNECTION_H

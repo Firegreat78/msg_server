@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS public.users
     created_at timestamp with time zone NOT NULL DEFAULT now(),
     is_online boolean NOT NULL DEFAULT false,
     last_seen_online timestamp with time zone NOT NULL DEFAULT now(),
+    is_deleted boolean NOT NULL DEFAULT false,
     CONSTRAINT users_login_key UNIQUE (login),
     CONSTRAINT users_username_key UNIQUE (username)
 );
@@ -112,6 +113,11 @@ BEGIN
     IF user_a = user_b THEN
         RAISE EXCEPTION 'Cannot create private chat with the same user (%)', user_a;
     END IF;
+    
+	-- if one of users has a deleted account, return 0
+	IF user_a IN (SELECT id FROM users WHERE is_deleted) OR user_b in (SELECT id FROM users WHERE is_deleted) THEN
+		RETURN 0;
+	END IF;
 
     -- Normalize user order to match CHECK constraint (user1_id < user2_id)
     SELECT user1_id, user2_id INTO user_a, user_b
