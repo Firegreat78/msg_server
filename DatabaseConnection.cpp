@@ -195,8 +195,27 @@ json DatabaseConnection::registerHandler(json const& js)
     {
         std::lock_guard<std::mutex> lock(mutex);
         pqxx::work txn(*connection);
-        // TODO: add check for existing row before inserting so the primary key won't increment
-        // This increments PK on failure
+
+        query_result = txn.exec_params(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM users "
+            "WHERE (login = $1::text OR username = $2::text) "
+            "AND NOT is_deleted"
+            ")",
+            login, username
+        );
+        
+        bool const unique_violation = query_result[0][0].as<bool>();
+        if (unique_violation)
+        {
+            std::string const msg = std::string("New user ") + user_info + 
+            "has not been added to the 'users' database: unique violation occurred.";
+            Logger::getInstance().log(msg);
+            response["reason"] = "An account with given login and/or username already exists";
+            response["success"] = 0;
+            return response;
+        }
+
         query_result = txn.exec_params(
             "INSERT INTO users (login, username, password_hash) "
             "VALUES ($1, $2, $3)", 
@@ -207,16 +226,6 @@ json DatabaseConnection::registerHandler(json const& js)
             "has been added to the 'users' database.";
         Logger::getInstance().log(msg);
         response["success"] = 1;
-    }
-
-    catch (pqxx::unique_violation const& e)
-    {
-        std::string const msg = std::string("New user ") + user_info + 
-            "has not been added to the 'users' database. pqxx::unique_violation exception was thrown: " + 
-            e.what();
-        Logger::getInstance().log(msg);
-        response["reason"] = "An account with given login and/or username already exists";
-        response["success"] = 0;
     }
 
     catch (pqxx::sql_error const& e)
@@ -1526,9 +1535,9 @@ json DatabaseConnection::deleteAccountHandler(json const& js)
             "UPDATE users "
             "SET is_deleted = TRUE, "
             "is_online = FALSE, "
-            "login = $2::text, username = $2::text "
+            "login = NULL, username = NULL "
             "WHERE id = $1::integer",
-            logon_user_id, std::string()
+            logon_user_id
         );
         query_result = txn.exec_params(
             "UPDATE message "

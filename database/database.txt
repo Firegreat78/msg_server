@@ -12,13 +12,12 @@ BEGIN
     END LOOP;
 END $$;
 
--- User
 CREATE TABLE IF NOT EXISTS public.users
 (
     id SERIAL PRIMARY KEY,
-    login text COLLATE pg_catalog."default" NOT NULL,
-    username text COLLATE pg_catalog."default" NOT NULL,
-    password_hash text COLLATE pg_catalog."default" NOT NULL,
+    login text COLLATE pg_catalog."default",
+    username text COLLATE pg_catalog."default",
+    password_hash text COLLATE pg_catalog."default",
     created_at timestamp with time zone NOT NULL DEFAULT now(),
     is_online boolean NOT NULL DEFAULT false,
     last_seen_online timestamp with time zone NOT NULL DEFAULT now(),
